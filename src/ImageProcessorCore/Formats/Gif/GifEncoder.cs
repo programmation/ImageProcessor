@@ -10,6 +10,8 @@ namespace ImageProcessorCore.Formats
     using System.Linq;
     using System.Threading.Tasks;
 
+    using ImageProcessorCore.Quantizers;
+
     /// <summary>
     /// Image encoder for writing image data to a stream in gif format.
     /// </summary>
@@ -20,6 +22,11 @@ namespace ImageProcessorCore.Formats
         /// </summary>
         /// <remarks>For gifs the value ranges from 1 to 256.</remarks>
         public int Quality { get; set; }
+
+        /// <summary>
+        /// The quantizer for reducing the color count.
+        /// </summary>
+        public IQuantizer Quantizer { get; set; } = new OctreeQuantizer();
 
         /// <inheritdoc/>
         public string Extension => "gif";
@@ -61,7 +68,7 @@ namespace ImageProcessorCore.Formats
             this.WriteGlobalLogicalScreenDescriptor(image, stream, bitDepth);
             QuantizedImage quantized = this.WriteColorTable(imageBase, stream, quality, bitDepth);
 
-            this.WriteGraphicalControlExtension(imageBase, stream);
+            this.WriteGraphicalControlExtension(imageBase, stream, quantized.TransparentIndex);
             this.WriteImageDescriptor(quantized, quality, stream);
 
             if (image.Frames.Any())
@@ -69,7 +76,7 @@ namespace ImageProcessorCore.Formats
                 this.WriteApplicationExtension(stream, image.RepeatCount, image.Frames.Count);
                 foreach (ImageFrame frame in image.Frames)
                 {
-                    this.WriteGraphicalControlExtension(frame, stream);
+                    this.WriteGraphicalControlExtension(frame, stream, quantized.TransparentIndex);
                     this.WriteFrameImageDescriptor(frame, stream);
                 }
             }
@@ -123,13 +130,12 @@ namespace ImageProcessorCore.Formats
         /// <returns>The <see cref="QuantizedImage"/></returns>
         private QuantizedImage WriteColorTable(ImageBase image, Stream stream, int quality, int bitDepth)
         {
-            // Quantize the image returning a pallete.
-            IQuantizer quantizer = new OctreeQuantizer(quality.Clamp(1, 255), bitDepth);
-            QuantizedImage quantizedImage = quantizer.Quantize(image);
+            // Quantize the image returning a palette.
+            QuantizedImage quantizedImage = this.Quantizer.Quantize(image, quality);
 
-            // Grab the pallete and write it to the stream.
-            Bgra32[] pallete = quantizedImage.Palette;
-            int pixelCount = pallete.Length;
+            // Grab the palette and write it to the stream.
+            Bgra32[] palette = quantizedImage.Palette;
+            int pixelCount = palette.Length;
 
             // Get max colors for bit depth.
             int colorTableLength = (int)Math.Pow(2, bitDepth) * 3;
@@ -139,7 +145,7 @@ namespace ImageProcessorCore.Formats
                 i =>
                     {
                         int offset = i * 3;
-                        Bgra32 color = pallete[i];
+                        Bgra32 color = palette[i];
 
                         colorTable[offset] = color.R;
                         colorTable[offset + 1] = color.G;
@@ -156,14 +162,11 @@ namespace ImageProcessorCore.Formats
         /// </summary>
         /// <param name="image">The <see cref="ImageBase"/> to encode.</param>
         /// <param name="stream">The stream to write to.</param>
-        private void WriteGraphicalControlExtension(ImageBase image, Stream stream)
+        /// <param name="transparencyIndex">The index of the color in the color palette to make transparent.</param>
+        private void WriteGraphicalControlExtension(ImageBase image, Stream stream, int transparencyIndex)
         {
-            // Calculate the quality.
-            int quality = this.Quality > 0 ? this.Quality : image.Quality;
-            quality = quality > 0 ? quality.Clamp(1, 256) : 256;
-
             // TODO: Check transparency logic.
-            bool hasTransparent = quality > 1;
+            bool hasTransparent = transparencyIndex > -1;
             DisposalMethod disposalMethod = hasTransparent
                 ? DisposalMethod.RestoreToBackground
                 : DisposalMethod.Unspecified;
@@ -172,7 +175,7 @@ namespace ImageProcessorCore.Formats
             {
                 DisposalMethod = disposalMethod,
                 TransparencyFlag = hasTransparent,
-                TransparencyIndex = quality - 1, // Quantizer sets last index as transparent.
+                TransparencyIndex = transparencyIndex,
                 DelayTime = image.FrameDelay
             };
 
@@ -187,7 +190,7 @@ namespace ImageProcessorCore.Formats
 
             this.WriteByte(stream, packed);
             this.WriteShort(stream, extension.DelayTime);
-            this.WriteByte(stream, extension.TransparencyIndex);
+            this.WriteByte(stream, extension.TransparencyIndex == -1 ? 255 : extension.TransparencyIndex);
             this.WriteByte(stream, GifConstants.Terminator);
         }
 

@@ -10,7 +10,7 @@
 
     public class SamplerTests : ProcessorTestBase
     {
-        public static readonly TheoryData<string, IResampler> Samplers =
+        public static readonly TheoryData<string, IResampler> ReSamplers =
             new TheoryData<string, IResampler>
             {
                 { "Bicubic", new BicubicResampler() },
@@ -30,6 +30,12 @@
                 //{ "Welch", new WelchResampler() }
             };
 
+        public static readonly TheoryData<string, IImageSampler> Samplers = new TheoryData<string, IImageSampler>
+        {
+             { "Resize", new Resize(new BicubicResampler()) },
+             { "Crop", new Crop() }
+        };
+
         public static readonly TheoryData<RotateType, FlipType> RotateFlips = new TheoryData<RotateType, FlipType>
         {
             { RotateType.None, FlipType.Vertical },
@@ -41,6 +47,35 @@
 
         [Theory]
         [MemberData("Samplers")]
+        public void SampleImage(string name, IImageSampler processor)
+        {
+            if (!Directory.Exists("TestOutput/Sample"))
+            {
+                Directory.CreateDirectory("TestOutput/Sample");
+            }
+
+            foreach (string file in Files)
+            {
+                using (FileStream stream = File.OpenRead(file))
+                {
+                    Stopwatch watch = Stopwatch.StartNew();
+                    Image image = new Image(stream);
+                    string filename = Path.GetFileNameWithoutExtension(file) + "-" + name + Path.GetExtension(file);
+                    using (FileStream output = File.OpenWrite($"TestOutput/Sample/{ Path.GetFileName(filename) }"))
+                    {
+                        processor.OnProgress += this.ProgressUpdate;
+                        image = image.Process(image.Width / 2, image.Height / 2, processor);
+                        image.Save(output);
+                        processor.OnProgress -= this.ProgressUpdate;
+                    }
+
+                    Trace.WriteLine($"{ name }: { watch.ElapsedMilliseconds}ms");
+                }
+            }
+        }
+
+        [Theory]
+        [MemberData("ReSamplers")]
         public void ImageShouldResize(string name, IResampler sampler)
         {
             if (!Directory.Exists("TestOutput/Resize"))
@@ -57,7 +92,7 @@
                     string filename = Path.GetFileNameWithoutExtension(file) + "-" + name + Path.GetExtension(file);
                     using (FileStream output = File.OpenWrite($"TestOutput/Resize/{filename}"))
                     {
-                        image.Resize(image.Width / 2, image.Height / 2, sampler, this.ProgressUpdate)
+                        image.Resize(image.Width / 2, image.Height / 2, sampler, false, this.ProgressUpdate)
                              .Save(output);
                     }
 
@@ -85,7 +120,7 @@
                     string filename = Path.GetFileNameWithoutExtension(file) + "-" + name + Path.GetExtension(file);
                     using (FileStream output = File.OpenWrite($"TestOutput/Resize/{filename}"))
                     {
-                        image.Resize(image.Width / 3, 0, new TriangleResampler(), this.ProgressUpdate)
+                        image.Resize(image.Width / 3, 0, new TriangleResampler(), false, this.ProgressUpdate)
                              .Save(output);
                     }
 
@@ -113,7 +148,7 @@
                     string filename = Path.GetFileNameWithoutExtension(file) + "-" + name + Path.GetExtension(file);
                     using (FileStream output = File.OpenWrite($"TestOutput/Resize/{filename}"))
                     {
-                        image.Resize(0, image.Height / 3, new TriangleResampler(), this.ProgressUpdate)
+                        image.Resize(0, image.Height / 3, new TriangleResampler(), false, this.ProgressUpdate)
                              .Save(output);
                     }
 
@@ -150,7 +185,7 @@
         }
 
         [Theory]
-        [MemberData("Samplers")]
+        [MemberData("ReSamplers")]
         public void ImageShouldRotate(string name, IResampler sampler)
         {
             if (!Directory.Exists("TestOutput/Rotate"))
@@ -167,7 +202,7 @@
                     string filename = Path.GetFileNameWithoutExtension(file) + "-" + name + Path.GetExtension(file);
                     using (FileStream output = File.OpenWrite($"TestOutput/Rotate/{filename}"))
                     {
-                        image.Rotate(45, sampler, this.ProgressUpdate)
+                        image.Rotate(45, sampler, false, this.ProgressUpdate)
                              //.BackgroundColor(Color.Aqua)
                              .Save(output);
                     }
@@ -234,11 +269,6 @@
             float result = sampler.GetValue(x);
 
             Assert.Equal(result, expected);
-        }
-
-        private void ProgressUpdate(object sender, ProgressEventArgs e)
-        {
-            Assert.InRange(e.RowsProcessed, 1, e.TotalRows);
         }
     }
 }
